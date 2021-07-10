@@ -24,7 +24,6 @@ library(purrr)
 library(labdsv) #hellinger transformation
 
 ##### load data #####
-
 #shorebird data
 shorebird<-read_excel("Shorebird_People_Data/Shorebird_People_Data.xlsx")
 
