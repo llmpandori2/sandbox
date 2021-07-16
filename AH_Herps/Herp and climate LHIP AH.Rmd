@@ -1,0 +1,345 @@
+---
+title: "Herpetofauna and Historic Climate"
+author: "Alisa Hernandez"
+date: "6/29/2021"
+output: ioslides_presentation
+---
+
+
+
+```{r logistics, include=FALSE}
+#########################################################################
+#Title: Herpetofauna Community and Climate of Cabrillo National Monument
+#Purpose: To understand and visualize the relationship of herpetofauna community and climate factors within Cabrillo National Monument 1995-2020.
+#Author: Alisa Hernandez
+#Created: 6/29/21
+#Edited: 6/29/21
+#########################################################################
+library(readr)
+library(readxl)
+library(PNWColors)
+library(viridis)
+library(lubridate)
+library(broom)
+# library(rstatix)
+library(vegan)
+library(tidyverse)
+library(patchwork)
+library(mgcv)
+
+# setwd('C:/Users/alisa/Dropbox (CSU Fullerton)/LHIP Cabrillo Internship/RStudio work')
+
+##Importing Data sets - pitfall array data and climate data 1995-2020
+# LP changed from AH path to LP computer path - copy + paste old code here
+pitfall <- read_excel("../AH_Herps/CABR_pitfall_data.xlsx")
+  
+SD_climate<-read_csv("../AH_Herps/SD_Intl_Airport_1995-2021.csv")
+
+####Cleaning data
+#Selecting only the columns of interest, fixing column names for matching and simplicity
+pitfall_limited<-pitfall%>%
+  group_by(SurveyYear, Season, Month, Date1, Type, SPECIES)%>%
+  rename(Species=SPECIES, SurveyDate=Date1)%>%
+  summarise(Count=n())
+  
+#Filtering for herpetofauna community
+herps<-filter(pitfall_limited, Type %in% c('Lizard', 'LIZARD', 'Snake', 'SNAKE'))
+
+#Converting to usable dates, making precipitation values into numeric form, selecting columns of interest, summarizing hourly data into daily averages
+climate<-SD_climate%>%
+  mutate(SurveyYear=year(date), Month=month(date), SurveyDate=date(date), hourlyprecipitation=as.numeric(hourlyprecipitation))%>%
+  group_by(SurveyDate, SurveyYear, Month)%>%
+  summarise(dailydewpt=mean(na.omit(hourlydewpointtemperature)),
+            dailydrybulb=mean(na.omit(hourlydrybulbtemperature)),
+            dailyrelhum=mean(na.omit(hourlyrelativehumidity)),
+            dailyprecip = mean(na.omit(hourlyprecipitation)))
+       
+     
+####Joining Data
+herps_climate<-herps%>%
+  left_join(climate, by = c("SurveyDate", "SurveyYear", "Month"))
+
+
+####Wide format transition
+##Herpetofauna and climate
+herps_climate_wide <- herps_climate %>%
+  group_by(SurveyYear, Month, Season, Species) %>%
+  select(-c(Type, SurveyDate))%>%
+  pivot_wider(names_from = Species, values_from = Count, values_fill = 0)
+
+#Herps wide format
+herps_wide <- herps %>%
+  select(-c(Type, SurveyDate))%>%
+  # add values_fill argument to fill NAs with 0's
+  pivot_wider(names_from = Species, values_from = Count, values_fill = 0)
+
+#Climate longer format for CCA, compiles climate factors into 2 columns.
+climate_longer <- climate%>%
+  pivot_longer(cols=starts_with("daily"),
+               names_to = 'weather_type', values_to = 'weather_val')
+#Reordering so that the first column is the numeric climate values.
+climate_longer2<-climate_longer[, c(5,4,1,2,3)]
+
+#Climate wide format
+climate_wide<-climate_longer%>%
+  select(-c(1:3))%>%
+  pivot_wider(names_from = weather_type, values_from = weather_val)
+
+#Color palette for figures
+pal=pnw_palette("Sailboat", 1, type = "discrete")
+```
+
+
+## The questions I want to answer
+1. How has San Diego climate changed in the last twenty five years?
+2. How has the Cabrillo National Monument herpetofauna community changed in the last 25 years?
+3. Has the herpetofauna community been changed by climate?
+  + Which species have been the most successful?
+4. Can we predict which species will be successful under climate change conditions?
+
+
+
+## Question 1 - 25 years of San Diego climate
+
+```{r climate, }
+dewpt <- ggplot(climate,
+       aes(x=SurveyDate,
+           y=dailydewpt))+
+  geom_point()+
+  geom_smooth(method=lm, se=FALSE)+
+   theme_classic()+
+   scale_fill_manual(values=pal)+
+  ggtitle("Daily dewpoint over time")
+
+  
+ temp <- ggplot(climate, aes(x=SurveyDate,y=dailydrybulb))+
+   geom_point()+
+   geom_smooth(method=lm, se=FALSE)+
+   theme_classic()+
+   scale_fill_manual(values=pal)+
+   ggtitle("Daily air temperature over time")
+ 
+ 
+ hum <- ggplot(climate, aes(x=SurveyDate,y=dailyrelhum))+
+   geom_point()+
+   geom_smooth(method=lm, se=FALSE)+
+   theme_classic()+
+   scale_fill_manual(values=pal)+
+   ggtitle("Daily relative humidity over time")
+ 
+ 
+ precip <- ggplot(climate, aes(x=SurveyYear,y=dailyprecip))+
+   geom_col(color="light blue", fill="light blue")+
+   theme_classic()+
+   scale_fill_manual(values = pnw_palette("Sailboat",1))+
+   ggtitle("Daily precipitation over time")
+ 
+ # merge plots using facet
+ (dewpt + temp)/(hum + precip)
+ 
+ # double check that all plots with lines shown are significant
+ 
+```
+
+## Question 2 - 25 years of herpetofauna community
+
+```{r herp community}
+ggplot(herps, aes(x=SurveyYear, y=Count, fill=Species))+
+  geom_col()+
+  theme_classic()+
+  ggtitle("Herpetofauna community over time")+
+  ggsave("Herpetofauna community over time.png")
+
+ggplot(herps%>%filter(Type=="Lizard"|Type=="LIZARD"), aes(x=SurveyYear, y=Count, fill=Species))+
+  geom_col()+
+  theme_classic()+
+  ggtitle("Lizard community over time")
+
+ggplot(herps%>%filter(Type=="Snake"|Type=="SNAKE"), aes(x=SurveyYear, y=Count, fill=Species))+
+  geom_col()+
+  scale_color_viridis()+
+  theme_classic()+
+  ggtitle("Snake community over time")
+
+ggplot(herps%>%filter(Type=="Lizard"|Type=="LIZARD"), aes(x=Species, y=Count, fill=Species))+
+  geom_col()+
+  theme_classic()+
+  ggtitle("Lizard abundance by species")
+
+```
+
+## Question 3 - Climate and community analysis
+
+```{r pressure}
+#Attempted on-parametric multiple regression
+#########They aren't working :( why?
+
+herps_climate_NMDS <- metaMDS(herps_climate_wide[,-c(1:3)], k = 2, trymax = 100)
+#error I keep getting: Error in if (autotransform && xam > 50) { : missing value where TRUE/FALSE needed
+
+
+herps_cca = cca(herps_wide[,-c(1:3)], climate_longer2[,-c(3:5)])
+#error I keep getting: Error in rowSums(X) : 'x' must be numeric
+
+#Trying a single lm...
+lm_totalherp_count.season<-lm(Count~Season, data=herps_climate)
+
+summary(totalherpcount.precip_LM)
+
+ggplot(herps_climate,
+       aes(x=Count,
+           y=dailyprecip))+
+  geom_point()+
+  geom_smooth(method="lm")
+
+##Precipitation lm for top 4 species
+lm_UTST_precip<-lm(Count~dailyprecip, data=herps_climate%>%filter(Species=="UTST"))
+summary(lm_UTST_precip) ### p-value: 0.1129
+
+lm_SCOC_precip<-lm(Count~dailyprecip, data=herps_climate%>%filter(Species=="SCOC"))
+summary(lm_SCOC_precip) ### p-value: 0.3271
+
+lm_CNHY_precip<-lm(Count~dailyprecip, data=herps_climate%>%filter(Species=="CNHY"))
+summary(lm_CNHY_precip) ### p-value: 0.4281
+
+lm_MALA_precip<-lm(Count~dailyprecip, data=herps_climate%>%filter(Species=="MALA"))
+summary(lm_MALA_precip) ### p-value: 0.5636
+
+##Dew point lm for top 4 species
+lm_UTST_dewpt<-lm(Count~dailydewpt, data=herps_climate%>%filter(Species=="UTST"))
+summary(lm_UTST_dewpt) ### p-value: 0.0005111
+
+# this helps check assumptions - run in console and hit enter in the console after running to see plots pop up in the plot window
+plot(lm_UTST_dewpt)
+
+ggplot(herps_climate%>%filter(Species=="UTST"), aes(x= dailydewpt, y = Count))+
+  geom_point()
+
+
+
+lm_UTST_dewpt2 <- lm(Count~dailydewpt, data= herps_climate %>% 
+                                             filter(Species=="UTST" & Count <= 9))
+summary(lm_UTST_dewpt2)
+
+
+# GAM - don't recommend this for this particular data; the best case to use it is when you have roller-coaster type data
+gam_UTST_dewpt <- gam(Count ~ s(dailydewpt, fx = FALSE, k = -1, bs = 'cr'), data = herps_climate %>% filter(Species == 'UTST'))
+
+summary(gam_UTST_dewpt)
+
+# plot of GAM is just geom_smooth 
+ggplot(herps_climate%>%filter(Species=="UTST"), aes(x=Count, y=dailydewpt))+
+  geom_point()+
+  geom_smooth()
+
+
+lm_SCOC_dewpt<-lm(Count~dailydewpt, data=herps_climate%>%filter(Species=="SCOC"))
+summary(lm_SCOC_dewpt) ### p-value: 3.128e-08
+ggplot(herps_climate%>%filter(Species=="SCOC"), aes(x=Count, y=dailydewpt))+
+  geom_point()+
+  geom_smooth(method="lm")
+
+lm_CNHY_dewpt<-lm(Count~dailydewpt, data=herps_climate%>%filter(Species=="CNHY"))
+summary(lm_CNHY_dewpt) ### p-value: 0.8032
+
+lm_MALA_dewpt<-lm(Count~dailydewpt, data=herps_climate%>%filter(Species=="MALA"))
+summary(lm_MALA_dewpt) ### p-value: 0.1914
+
+##Dry bulb lm for top 4 species
+lm_UTST_drybulb<-lm(Count~dailydrybulb, data=herps_climate%>%filter(Species=="UTST"))
+summary(lm_UTST_drybulb) ### p-value: 6.049e-11
+ggplot(herps_climate%>%filter(Species=="UTST"), aes(x=Count, y=dailydrybulb))+
+  geom_point()+
+  geom_smooth(method="lm")
+
+lm_SCOC_drybulb<-lm(Count~dailydrybulb, data=herps_climate%>%filter(Species=="SCOC"))
+summary(lm_SCOC_drybulb) ### p-value: 0.1435
+
+lm_CNHY_drybulb<-lm(Count~dailydrybulb, data=herps_climate%>%filter(Species=="CNHY"))
+summary(lm_CNHY_drybulb) ### p-value: 0.5703
+
+lm_MALA_drybulb<-lm(Count~dailydrybulb, data=herps_climate%>%filter(Species=="MALA"))
+summary(lm_MALA_drybulb) ### p-value: 0.3878
+
+##Relative humidity lm for top 4 species
+lm_UTST_relhum<-lm(Count~dailyrelhum, data=herps_climate%>%filter(Species=="UTST"))
+summary(lm_UTST_relhum) ### p-value: 0.2788
+
+lm_SCOC_relhum<-lm(Count~dailyrelhum, data=herps_climate%>%filter(Species=="SCOC"))
+summary(lm_SCOC_relhum) ### p-value: 3.765e-11
+ggplot(herps_climate%>%filter(Species=="SCOC"), aes(x=Count, y=dailyrelhum))+
+  geom_point()+
+  geom_smooth(method="lm")
+
+lm_CNHY_relhum<-lm(Count~dailyrelhum, data=herps_climate%>%filter(Species=="CNHY"))
+summary(lm_CNHY_relhum) ### p-value: 0.2415
+
+lm_MALA_relhum<-lm(Count~dailyrelhum, data=herps_climate%>%filter(Species=="MALA"))
+summary(lm_MALA_relhum) ### p-value: 0.24
+
+
+#Calculating richness, now what do I do with it? Attach it to the other data frame and plot it over time?
+herps_wide2 <- herps%>%
+  group_by(SurveyYear, Species) %>%
+  pivot_wider(names_from = Species, values_from = Count)
+
+herps_rich<-specnumber(herps_wide2[,-c(1:5)])
+
+herps2<-ftable(SurveyYear ~ Species, data=herps)
+```
+
+
+# Lauren's wild code chunk
+```{r}
+
+# side-blotch lizard
+
+# step 1 - get data
+UTST <- herps_climate %>%
+  filter(Species == 'UTST') %>%
+  # summarize to get abundance across factors (year, temp variance, hum) 
+  # hypotheses - lizards related to temp variance, year & humidity
+  group_by(SurveyYear) %>%
+  summarise(Count = sum(Count),
+            Temp_var = var(dailydrybulb),
+            Hum = mean(dailyrelhum))
+
+# step 2 - run model
+UTST_mod <- glm(Count ~ SurveyYear + Temp_var + Hum, data = UTST)
+summary(UTST_mod)
+
+plot(UTST_mod)
+
+# step 3 - plot results
+ggplot(data = UTST, 
+       mapping = aes(x = Hum, y = Count)) + 
+  geom_point() + 
+  geom_smooth(method = 'lm')
+
+```
+
+
+# how to use spp richness data?
+
+```{r}
+#Calculating richness
+
+herps_wide2 <- herps%>%
+  group_by(SurveyYear, Species) %>%
+  pivot_wider(names_from = Species, values_from = Count)
+
+herps_wide3 <- herps %>%
+  group_by(SurveyYear, Species) %>%
+  summarise(Count = sum(Count)) %>%
+  pivot_wider(names_from = Species, values_from = Count, values_fill = 0)
+
+View(herps_rich_year)
+
+herps_rich_year <- as_tibble('richness' = specnumber(herps_wide3[,-1]), 'SurveyYear' = herps_wide3$SurveyYear)
+
+# join to herp data (here we'll use UTST as an example b/c its summarized by year)
+
+UTST_rich <- left_join(UTST, herps_rich_year, by = 'SurveyYear')
+
+```
+
