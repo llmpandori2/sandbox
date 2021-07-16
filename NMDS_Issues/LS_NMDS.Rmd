@@ -24,7 +24,7 @@ library(purrr)
 library(labdsv) #hellinger transformation
 
 ##### load data #####
-
+# LP - i changed the paths for these to work with my setup
 #shorebird data
 shorebird<-read_excel("NMDS_Issues/Shorebird_People_Data.xlsx")
 
@@ -44,15 +44,15 @@ align <- read_csv('NMDS_Issues/TGT_all.csv')
 
 # abiotic data
 # sea surface temp from SIO Pier
-sst <- read_csv("SIO_TEMP.csv", 
+sst <- read_csv("NMDS_Issues/SIO_TEMP.csv", 
                 skip = 26)
 
 # tide predictions from tbone tides
-tide <- read_csv("tbone_tides_hourly_1990_2026.csv", 
+tide <- read_csv("NMDS_Issues/tbone_tides_hourly_1990_2026.csv", 
                  col_types = cols(datetime = col_datetime(format = "%m/%d/%Y %H:%M")))
 
 # southern oscillation index from NOAA NCEI
-soi <- read_excel("SOI_Data_NOAA_NCEI_1990_2020.xlsx")
+soi <- read_excel("NMDS_Issues/SOI_Data_NOAA_NCEI_1990_2020.xlsx")
 ```
 
 ```{r}
@@ -123,13 +123,13 @@ shorebird2<- ungroup(shorebird) %>%
 # adapted from B. Hong's 2019-2021 Annual Report Code
 
 # keep target raw, retains plot-level data, and tidy
-target <- 
+target <- target %>%
+#********************** filter seasons for fall only for balanced sampling******
+  filter(SeasonName == 'Fall') %>%
+  # filter for relevant sites (my data still had other sites - YMMV)
+  filter(SiteCode %in% cabrsites) %>%
   # add generic codes to this set, along with formatted scientific names
-  left_join(target, align, by = 'SpeciesCode') %>%
-  # get rid of old scientific name (align has better one)
-  select(-c(Scientific_name.x)) %>%
-  # rename scientific name column
-  rename(Scientific_name = Scientific_name.y) %>%
+  left_join(., select(align, -c(Scientific_name)), by = 'SpeciesCode') %>%
   # make plot number a numeric column
   mutate(Plot_num = parse_number(substr(Plot_code, 6,6))) %>%
   # add zone/site column
@@ -140,7 +140,7 @@ target <-
   # only get unique rows (removes duplicates)
   distinct()
 
-unique(target$ZoneName)==unique(shorebird2$ZoneName)
+unique(target$ZoneName) == unique(shorebird2$ZoneName)
 
 # summarize by 2 methods: all and 1990 (1990-present)
 
@@ -204,25 +204,107 @@ group_by(ZoneName, SurveyYear, Zone, SpeciesCode, Scientific_name) %>%
 summarise(Cover_mean = mean(pct_cover), #keep if want each year to have 1 point
 Cover_SE = sd(pct_cover)/sqrt(length(pct_cover)))
 
-#rotate from long to wide
-target_wide<- spread(target_90_home, Scientific_name, Cover_mean)%>%
-  mutate_all(~replace(., is.na(.), 0))
 
-#combine shorebird3 and target_wide
-target_shore<-left_join(target_wide, shorebird2[,-c(2)])%>%
-  drop_na()
+#******** This is the start of LP edits ***************************************
+# I think the issue here is that the target_wide doesn't include all species in the target plots, only the target species.
+# I suggest having different matrices for different target species (one NMDS/Permanova for each plot type - mussels, barancles, etc. - just like in the linear models - the difference here is that we're using a species assemblage in the plots instead of a single species).
+
+# get avg pct cover per year for all 1990 spp - to be // in replication level to people data (annual counts)
+target_1990_summary <- target_1990 %>%
+  ungroup() %>%
+  group_by(SiteCode, SiteName, ZoneName, SurveyYear, Zone, Scientific_name) %>%
+  summarise(Mean_cover = mean(pct_cover))
+
+
+#rotate from long to wide
+target_wide <- target_1990_summary %>%
+  # ungroup target_1990 to prevent calc errors
+  ungroup() %>%
+  # pivot wider, filling in blanks with 0's (data don't have 0's added at the moment)
+  pivot_wider(., names_from = Scientific_name, values_from = Mean_cover, values_fill = 0)
+
+# realized there's some columns without target species/plot ID'ed (can comment this out/remove later)
+View(target_wide %>% filter(is.na(Zone)))
+# none have any % cover...so we'll delete for now
+target_wide <- filter(target_wide, Zone %in% zonelist)
+
+# there's a value for the `NA` column with a percent cover of 26 - investigate
+# oooh - stephanocystis was coded incorrectly (STESPP instead of STEDIO. I have added this to the TGT_all.csv and fixed it in the database - this should fix things. I'll send you an updated version.
+
+# oringal code follows this comment, replaced by above
+# target_wide<- spread(target_1990, Scientific_name, Cover_mean)%>%
+  # mutate_all(~replace(., is.na(.), 0))
+
+#combine shorebird2? and target_wide
+target_shore<-left_join(target_wide, shorebird2[,-c(2)], by = c('ZoneName', 'SurveyYear'))%>%
+  drop_na() %>%
+  # get rid of NA column (filled with 0's)
+  select(-c(`NA`))
 ```
 
 ```{r}
-#separate out people/year from target_shore
-environ<-target_shore[c(1,2,3,4,11)] #tree
+#separate out people/year from target_shore (can use : to get integers between two values)
+environ<-target_shore[c(1:5,15)] #tree
 
 #separate out species matrix, including linking factors
-species<-target_shore[c(1,2,3,4,6,7,8,9,10)] #bird
+species<-target_shore[c(1:14)] #bird
 ```
+
+# LP Permanova/NMDS Suggestion
+I suggest having a different model for each plot type (like the linear models)
+I have done an example with silvetia plots here
+
+```{r}
+### Create 3 matrices: species, environment and identifier columns
+
+# species matrix (think of this matrix like a single spp in the linear models)
+sil.species <- target_shore %>%
+  filter(Zone == 'SIL') %>%
+  select(-c(SiteCode:Zone, people))
+
+# environmental factors matrix (want to test for effects of zone, people, year - like single-spp linear models)
+sil.env <- target_shore %>%
+  filter(Zone == 'SIL') %>%
+  select(SiteName, SurveyYear, people)
+
+# identifier column matrix 
+sil.id <- target_shore %>%
+  filter(Zone == 'SIL') %>%
+  select(SiteCode:Zone)
+
+### Run NMDS (this is directly from your code - well written!) 
+# I think your model may have had insufficient data b/c, when using the home plot data, there was only one spp per plot
+speciesMDS<-metaMDS(sil.species, distance= "bray", k = 2, trymax = 35, autotransform = T)
+
+NMDS1<-speciesMDS$points[,1]
+NMDS2<-speciesMDS$points[,2]
+species.plot<-cbind(sil.id, NMDS1, NMDS2)
+
+p<-ggplot(species.plot, aes(NMDS1, NMDS2, color = ZoneName))+
+  stat_ellipse(type='t',size = 1)+ ##draws 95% confidence interval ellipses
+  theme_minimal()+
+  geom_text(data=species.plot, aes(NMDS1, NMDS2, label = ZoneName), position=position_jitter(.35))+
+  annotate("text", x=min(NMDS1), y=min(NMDS2), label=paste('Stress =',round(speciesMDS$stress,3))) #add stress to plot
+p
+# plot works well :)
+
+# run permanova 
+species.dist<-vegdist(sil.species, method='bray')
+
+species.div<-adonis2(species.dist ~ ZoneName, data = sil.id, permutations = 999, method='bray')
+species.div
+
+# test env drivers next
+
+
+```
+
+
+
 
 ```{r}
 #permanova- following rpubs.com/collnell/manova
+# adapted in above code
 
 #make matrix
 species.matrix<-as.matrix(species[,5:9])
@@ -243,7 +325,7 @@ plot(dispersion, hull=F, ellipse=T) #just zone III shows up
 ```
 
 ```{r}
-#NMDS
+#NMDS - adapted in above code
 
 speciesMDS<-metaMDS(species.mat, distance="bray", k=2, trymax = 35, autotransform = T) #stress=0 insufficient data
 speciesMDS
