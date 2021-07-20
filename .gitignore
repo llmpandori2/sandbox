@@ -41,5 +41,7 @@ vignettes/*.pdf
 # Data files ending in csv or xlsx
 *.csv
 *.xlsx
+*.png
+
 
 
